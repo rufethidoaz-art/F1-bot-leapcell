@@ -1,11 +1,15 @@
 """
 F1 Telegram Bot - Vercel Version with Live Timing
 Main Flask application for Vercel deployment with enhanced logging
+FINAL WORKING VERSION with thread-safe queue
 """
 
 import os
 import sys
 import logging
+import asyncio
+import threading
+import queue
 from flask import Flask, request, jsonify
 from telegram import Update
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
@@ -43,6 +47,73 @@ app = Flask(__name__)
 
 # Global reference for bot application
 BOT_APP = None
+
+# Thread-safe queue for webhook updates
+update_queue = queue.Queue()
+
+
+def bot_worker():
+    """Background worker to process bot updates"""
+    global BOT_APP, update_queue
+
+    logger.info("Bot worker thread starting...")
+
+    # Create new event loop for this thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    try:
+        logger.info("Bot worker event loop created")
+
+        # Initialize bot if not already done
+        if BOT_APP is None:
+            logger.info("Bot worker initializing bot application...")
+            BOT_APP = setup_bot()
+            if BOT_APP:
+                logger.info("Bot worker setting up bot handlers...")
+                loop.run_until_complete(BOT_APP.initialize())
+                logger.info("Bot worker initialized successfully")
+            else:
+                logger.error("Failed to initialize bot in worker")
+                return
+        else:
+            logger.info("Bot worker using existing bot application")
+
+        # Process updates from queue
+        logger.info("Bot worker starting update processing loop...")
+        while True:
+            try:
+                logger.info("Bot worker waiting for updates...")
+                # Use regular queue.get() instead of asyncio
+                update = update_queue.get(timeout=1)
+                if update is None:  # Poison pill to stop worker
+                    logger.info("Bot worker received stop signal")
+                    break
+
+                logger.info(f"Bot worker processing update: {update.update_id}")
+                loop.run_until_complete(BOT_APP.process_update(update))
+                logger.info(
+                    f"Bot worker processed update {update.update_id} successfully"
+                )
+
+            except queue.Empty:
+                # Timeout is normal, just continue
+                continue
+            except Exception as e:
+                logger.error(f"Error in bot worker: {e}")
+                import traceback
+
+                logger.error(f"Worker error traceback: {traceback.format_exc()}")
+
+    except Exception as e:
+        logger.error(f"Bot worker failed with exception: {e}")
+        import traceback
+
+        logger.error(f"Worker startup error traceback: {traceback.format_exc()}")
+    finally:
+        logger.info("Bot worker shutting down...")
+        loop.close()
+        logger.info("Bot worker event loop closed")
 
 
 def setup_bot():
@@ -106,11 +177,12 @@ def home():
     logger.info("Health check requested")
     return {
         "status": "F1 Telegram Bot is running!",
-        "version": "1.0.0",
-        "timestamp": "2025-12-29T08:26:00Z",
+        "version": "1.0.2",
+        "timestamp": "2025-12-29T13:16:00Z",
         "deployment": "Vercel",
         "live_timing": "enabled",
         "logging": "enhanced",
+        "async_fix": "worker_thread_queue",
     }
 
 
@@ -127,32 +199,42 @@ def health_check():
 
 
 @app.route("/webhook", methods=["POST"])
-async def webhook():
+def webhook():
     """Telegram webhook endpoint with enhanced logging"""
-    global BOT_APP
+    global BOT_APP, update_queue
 
     logger.info(f"Webhook called with method: {request.method}")
     logger.info(f"Request headers: {dict(request.headers)}")
 
-    if BOT_APP is None:
-        logger.info("Bot application not initialized, setting up...")
-        BOT_APP = setup_bot()
-        if BOT_APP is None:
-            logger.error("Failed to setup bot application")
-            return jsonify({"error": "Bot not configured"}), 500
-        logger.info("Bot application initialized successfully")
-
     try:
         logger.info("Processing webhook request...")
-        update = Update.de_json(request.get_json(force=True), BOT_APP.bot)
+        # Parse JSON data safely
+        json_data = request.get_json(force=True)
+        if not json_data:
+            return jsonify({"error": "Invalid JSON data"}), 400
+
+        logger.info(f"Parsed JSON data: {json_data}")
+        logger.info(f"JSON data type: {type(json_data)}")
+
+        # Create update object
+        if BOT_APP is None:
+            logger.error("Bot application not initialized")
+            return jsonify({"error": "Bot not initialized"}), 500
+
+        update = Update.de_json(json_data, BOT_APP.bot)
         logger.info(
             f"Received update from user: {update.effective_user.id if update.effective_user else 'unknown'}"
         )
         logger.info(f"Update type: {type(update)}")
 
-        await BOT_APP.process_update(update)
-        logger.info("Webhook processed successfully")
-        return jsonify({"status": "ok", "message": "Update processed"}), 200
+        # Queue the update for processing in the worker thread
+        try:
+            update_queue.put(update)
+            logger.info("Update queued for processing")
+        except Exception as e:
+            logger.error(f"Error queueing update: {e}")
+
+        return jsonify({"status": "ok", "message": "Update queued for processing"}), 200
     except Exception as e:
         logger.error(f"Error processing webhook: {e}")
         logger.error(f"Request data: {request.get_data()}")
@@ -177,6 +259,13 @@ def get_logs():
 if __name__ == "__main__":
     # Local development mode
     logger.info("Starting F1 Bot in local mode...")
+
+    # Start bot worker thread (non-daemon so it stays alive)
+    worker_thread = threading.Thread(target=bot_worker, daemon=False)
+    worker_thread.start()
+    logger.info(f"Bot worker thread started (Thread ID: {worker_thread.ident})")
+
+    # Initialize bot in main thread for webhook creation
     BOT_APP = setup_bot()
     if BOT_APP:
         logger.info("Bot started successfully in local mode")

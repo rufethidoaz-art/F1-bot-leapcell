@@ -20,7 +20,7 @@ To set up the webhook for your bot, use one of these methods:
 
 #### Method 2: Using curl command
 ```bash
-curl -X POST https://api.telegram.org/botYOUR_BOT_TOKEN/setWebhook -d "url=https://kam-schizocarpous-sondra.ngrok-free.dev/webhook"
+curl -X POST https://api.telegram.org/botYOUR_BOT_TOKEN8460437666:AAHq-XBtLs40zv7YDiA8RH2yUkAEKqNmhmE/setWebhook -d "url=https://kam-schizocarpous-sondra.ngrok-free.dev/webhook"
 ```
 
 Replace `YOUR_BOT_TOKEN` with your actual bot token.

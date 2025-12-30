@@ -261,14 +261,33 @@ def webhook():
         logger.info(f"Received update from user: {user_id}")
         logger.info(f"Update type: {type(update)}")
 
-        # Queue the update for processing in the worker thread
+        # Process the update directly for LEAPCELL (since worker thread may not work)
         try:
-            update_queue.put(update)
-            logger.info("Update queued for processing")
+            logger.info("Processing update directly...")
+            # Initialize bot if not already done
+            if not BOT_APP:
+                logger.error("Bot application still not initialized")
+                return jsonify({"error": "Bot not initialized"}), 500
+            
+            # Run the update processing in the event loop
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                # Process the update directly
+                loop.run_until_complete(BOT_APP.process_update(update))
+                update_id = getattr(update, 'update_id', 'unknown') if update else 'unknown'
+                logger.info(f"Successfully processed update {update_id}")
+                return jsonify({"status": "ok", "message": "Update processed successfully"}), 200
+            except Exception as e:
+                logger.error(f"Error processing update: {e}")
+                return jsonify({"status": "error", "message": str(e)}), 500
+            finally:
+                loop.close()
+                
         except Exception as e:
-            logger.error(f"Error queueing update: {e}")
-
-        return jsonify({"status": "ok", "message": "Update queued for processing"}), 200
+            logger.error(f"Error in direct update processing: {e}")
+            return jsonify({"status": "error", "message": str(e)}), 500
     except Exception as e:
         logger.error(f"Error processing webhook: {e}")
         logger.error(f"Request data: {request.get_data()}")

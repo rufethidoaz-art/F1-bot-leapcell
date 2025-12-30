@@ -244,14 +244,12 @@ def webhook():
         logger.info(f"Parsed JSON data: {json_data}")
         logger.info(f"JSON data type: {type(json_data)}")
 
-        # Initialize bot if not already done
+        # Initialize bot on every request (serverless environment)
+        logger.info("Initializing bot application for this request...")
+        BOT_APP = setup_bot()
         if BOT_APP is None:
-            logger.info("Bot application not initialized, initializing now...")
-            BOT_APP = setup_bot()
-            if BOT_APP is None:
-                logger.error("Failed to initialize bot application")
-                return jsonify({"error": "Bot initialization failed"}), 500
-            logger.info("Bot application initialized successfully")
+            logger.error("Failed to initialize bot application")
+            return jsonify({"error": "Bot initialization failed"}), 500
 
         # Create update object
         update = Update.de_json(json_data, BOT_APP.bot)
@@ -261,23 +259,17 @@ def webhook():
         logger.info(f"Received update from user: {user_id}")
         logger.info(f"Update type: {type(update)}")
 
-        # Process the update directly for LEAPCELL (since worker thread may not work)
+        # Process the update directly for LEAPCELL
         try:
             logger.info("Processing update directly...")
-            # Initialize bot if not already done
-            if not BOT_APP:
-                logger.error("Bot application still not initialized")
-                return jsonify({"error": "Bot not initialized"}), 500
 
             # Use asyncio.run() for cleaner event loop management
             async def process_update_async():
                 try:
-                    # Initialize the bot application first (only if not already initialized)
-                    if not hasattr(BOT_APP, '_initialized') or not BOT_APP._initialized:
-                        logger.info("Initializing bot application...")
-                        await BOT_APP.initialize()
-                        BOT_APP._initialized = True
-                        logger.info("Bot application initialized")
+                    # Initialize the bot application for this request
+                    logger.info("Initializing bot application...")
+                    await BOT_APP.initialize()
+                    logger.info("Bot application initialized")
 
                     # Process the update directly
                     await BOT_APP.process_update(update)
